@@ -1,10 +1,10 @@
 mod event;
 
-use sdl2::event::{Event as SdlEvent};
+use sdl2::event::Event as SdlEvent;
 use std::time::{Duration, Instant};
 
-use crate::ui::Ui;
 use crate::ui::command::UiCommand;
+use crate::ui::Ui;
 
 pub use event::AppEvent;
 

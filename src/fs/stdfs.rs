@@ -1,6 +1,6 @@
 use std::fs::File;
-use std::path::{Path, PathBuf};
 use std::io::{BufRead, BufReader, Result};
+use std::path::{Path, PathBuf};
 
 use super::{Metadata, Provider};
 
@@ -14,7 +14,9 @@ struct StdFileSystem {
 
 impl StdFileSystem {
     pub fn new<P: AsRef<Path>>(root: P) -> Self {
-        StdFileSystem { root: root.as_ref().to_path_buf() }
+        StdFileSystem {
+            root: root.as_ref().to_path_buf(),
+        }
     }
 
     fn to_fs_path(&self, path: &str) -> PathBuf {

@@ -2,13 +2,13 @@
 #![allow(clippy::map_entry)]
 #![allow(clippy::or_fun_call)]
 #![allow(clippy::unreadable_literal)]
-
 #![allow(dead_code)]
 #![allow(proc_macro_derive_resolution_fallback)]
 #![deny(non_snake_case)]
 #![deny(unused_must_use)]
 
-#[macro_use] mod macros;
+#[macro_use]
+mod macros;
 
 mod asset;
 mod fs;
@@ -20,29 +20,33 @@ mod ui;
 mod util;
 mod vm;
 
+use ini::Ini;
 use log::*;
+use log4rs::append::console::ConsoleAppender;
+use log4rs::config::{Appender, Root};
+use log4rs::Config;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
-use crate::asset::EntityKind;
 use crate::asset::font::load_fonts;
 use crate::asset::frame::{FrameDb, FrameId};
 use crate::asset::message::Messages;
 use crate::asset::palette::read_palette;
 use crate::asset::proto::ProtoDb;
+use crate::asset::EntityKind;
 use crate::game::state::GameState;
 use crate::game::ui::world::WorldView;
-use crate::graphics::{EPoint, Point};
-use crate::graphics::color::{BLACK, GREEN};
 use crate::graphics::color::palette::overlay::PaletteOverlay;
+use crate::graphics::color::{BLACK, GREEN};
 use crate::graphics::font::{self, FontKey};
-use crate::graphics::geometry::TileGridView;
 use crate::graphics::geometry::sqr;
+use crate::graphics::geometry::TileGridView;
 use crate::graphics::render::software::Backend;
-use crate::state::{AppState, Update, HandleAppEvent};
+use crate::graphics::{EPoint, Point};
+use crate::state::{AppState, HandleAppEvent, Update};
 use crate::ui::Ui;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -59,8 +63,14 @@ fn version() -> String {
         "Dirty" => ("-dev", "-dirty"),
         _ => panic!("bad GIT_VERSION_STATUS: {}", GIT_VERSION_STATUS),
     };
-    format!("vault13 {}{dev} ({}{dirty} {})",
-        VERSION, GIT_SHORT_HASH, GIT_DATE, dev=dev, dirty=dirty)
+    format!(
+        "vault13 {}{dev} ({}{dirty} {})",
+        VERSION,
+        GIT_SHORT_HASH,
+        GIT_DATE,
+        dev = dev,
+        dirty = dirty
+    )
 }
 
 fn args() -> clap::App<'static, 'static> {
@@ -88,6 +98,15 @@ fn setup_file_system(fs: &mut fs::FileSystem, args: &clap::ArgMatches) {
     info!("Using resources dir: {}", res_dir.display());
 
     let mut dat_files = Vec::new();
+    let mut ini_files = Vec::new();
+
+    for file in &["fallout2.cfg", "f2_res.ini", "ddraw.ini"] {
+        let path: PathBuf = [res_dir, Path::new(file)].iter().collect();
+        if path.is_file() {
+            info!("Found {}", file);
+            ini_files.push(path);
+        }
+    }
 
     // Add patchXXX.dat files.
     for i in 0..999 {
@@ -113,7 +132,11 @@ fn setup_file_system(fs: &mut fs::FileSystem, args: &clap::ArgMatches) {
     let data_dir: PathBuf = [res_dir, Path::new("data")].iter().collect();
     if data_dir.is_dir() {
         info!("Found `data` dir");
-        fs.register_provider(fs::std::new_provider(data_dir).unwrap());
+        fs.register_provider(fs::stdfs::new_provider(data_dir).unwrap());
+    }
+
+    for ini_file in ini_files.iter() {
+        fs.register_provider(fs::inifile::new_provider(ini_file).unwrap());
     }
 
     for dat_file in dat_files.iter().rev() {
@@ -128,10 +151,7 @@ struct Timer {
 
 impl Timer {
     pub fn new(time: Instant) -> Self {
-        Self {
-            time,
-            last: time,
-        }
+        Self { time, last: time }
     }
 
     pub fn time(&self) -> Instant {
@@ -159,20 +179,24 @@ fn log_sdl_info() {
     for driver in sdl2::render::drivers() {
         use sdl2_sys::SDL_RendererFlags::*;
         let flags: Vec<_> = [
-                SDL_RENDERER_SOFTWARE,
-                SDL_RENDERER_ACCELERATED,
-                SDL_RENDERER_PRESENTVSYNC,
-                SDL_RENDERER_TARGETTEXTURE,
-            ].iter()
-            .filter(|&&v| driver.flags & (v as u32) != 0)
-            .map(|&v| format!("{:?}", v)[13..].to_ascii_lowercase())
-            .collect();
-        info!("  {}: {} (0x{:x}), {:?}, {} x {}",
+            SDL_RENDERER_SOFTWARE,
+            SDL_RENDERER_ACCELERATED,
+            SDL_RENDERER_PRESENTVSYNC,
+            SDL_RENDERER_TARGETTEXTURE,
+        ]
+        .iter()
+        .filter(|&&v| driver.flags & (v as u32) != 0)
+        .map(|&v| format!("{:?}", v)[13..].to_ascii_lowercase())
+        .collect();
+        info!(
+            "  {}: {} (0x{:x}), {:?}, {} x {}",
             driver.name,
-            flags.join(", "), driver.flags,
+            flags.join(", "),
+            driver.flags,
             driver.texture_formats,
             driver.max_texture_width,
-            driver.max_texture_height);
+            driver.max_texture_height
+        );
     }
 }
 
@@ -182,7 +206,12 @@ fn main() {
         std::env::set_var("RUST_LOG", "vault13=info");
     }
 
-    env_logger::init();
+    let stdout = ConsoleAppender::builder().build();
+    let config = Config::builder()
+        .appender(Appender::builder().build("stdout", Box::new(stdout)))
+        .build(Root::builder().appender("stdout").build(LevelFilter::Debug))
+        .unwrap();
+    let _handle = log4rs::init_config(config).unwrap();
 
     info!("Version: {}", version());
     info!("Build: {}", env!("BUILD_TARGET"));
@@ -208,7 +237,15 @@ fn main() {
         };
     }
 
-    let language = "english";
+    debug!("loading ini file");
+    let ini_reader = fs.reader("fallout2.cfg");
+    let read_conf_result = Ini::read_from(&mut ini_reader.unwrap());
+    let fallout2_config = match read_conf_result {
+        Ok(ini) => ini,
+        Err(error) => panic!("can't open file fallout2.cfg: {:?}", error),
+    };
+    let language = fallout2_config.get_from_or(Some("system"), "language", "deutsch");
+    debug!("language is {}", language);
 
     let fs = Rc::new(fs);
 
@@ -223,7 +260,8 @@ fn main() {
     let video = sdl.video().unwrap();
     info!("Using video driver: {}", video.current_video_driver());
 
-    let window = video.window("Vault 13", 640, 480)
+    let window = video
+        .window("Vault 13", 640, 480)
         .position_centered()
         .allow_highdpi()
         .build()
@@ -232,10 +270,7 @@ fn main() {
     let mouse = sdl.mouse();
     mouse.set_relative_mouse_mode(true);
 
-    let canvas = window
-        .into_canvas()
-        .build()
-        .unwrap();
+    let canvas = window.into_canvas().build().unwrap();
     info!("Using render driver: {}", canvas.info().name);
 
     let gfx_backend: Backend = Backend::new(canvas, Box::new(pal), PaletteOverlay::standard());
@@ -267,16 +302,7 @@ fn main() {
     ui.set_cursor_pos(Point::new(640 / 2, 480 / 2));
 
     let misc_msgs = Rc::new(Messages::read_file(&fs, language, "game/misc.msg").unwrap());
-    let mut state = GameState::new(
-        fs,
-        language,
-        proto_db,
-        frm_db,
-        fonts,
-        misc_msgs,
-        start,
-        ui,
-    );
+    let mut state = GameState::new(fs, language, proto_db, frm_db, fonts, misc_msgs, start, ui);
 
     state.new_game();
     state.switch_map(&map_name, ui);
@@ -290,10 +316,7 @@ fn main() {
         // Handle app events.
 
         for event in app_events.drain(..) {
-            state.handle_app_event(HandleAppEvent {
-                event,
-                ui,
-            });
+            state.handle_app_event(HandleAppEvent { event, ui });
         }
 
         // Handle input.
@@ -309,12 +332,17 @@ fn main() {
             }
             if !handled {
                 match event {
-                    Event::KeyDown { keycode: Some(Keycode::Backquote), .. } => {
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Backquote),
+                        ..
+                    } => {
                         draw_debug = !draw_debug;
                     }
-                    Event::Quit { .. } | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
-                        break 'running
-                    },
+                    Event::Quit { .. }
+                    | Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        ..
+                    } => break 'running,
                     _ => {}
                 }
             }
@@ -348,12 +376,18 @@ fn main() {
         if draw_debug {
             let world = state.world().borrow();
             let world_view = ui.widget_ref::<WorldView>(state.world_view());
-            let (mouse_hex_pos, mouse_sqr_pos) = if let Some(EPoint { point, .. }) = world_view.hex_cursor_pos() {
-                (point, world.camera().sqr().screen_to_tile(
-                    world.camera().hex().center_to_screen(point)))
-            } else {
-                (Point::new(-1, -1), Point::new(-1, -1))
-            };
+            let (mouse_hex_pos, mouse_sqr_pos) =
+                if let Some(EPoint { point, .. }) = world_view.hex_cursor_pos() {
+                    (
+                        point,
+                        world
+                            .camera()
+                            .sqr()
+                            .screen_to_tile(world.camera().hex().center_to_screen(point)),
+                    )
+                } else {
+                    (Point::new(-1, -1), Point::new(-1, -1))
+                };
             let (dude_pos, dude_dir) = {
                 let dude_obj = world.objects().get(world.objects().dude());
                 (dude_obj.pos().point, dude_obj.direction)
@@ -365,23 +399,46 @@ fn main() {
                  dude pos: {}, {} ({}) {:?}\n\
                  ambient: 0x{:x}\n\
                  paused: {}",
-                ui.cursor_pos().x, ui.cursor_pos().y,
-                mouse_hex_pos.x, mouse_hex_pos.y,
-                world.hex_grid().rect_to_linear_inv(mouse_hex_pos).map(|v| v.to_string()).unwrap_or_else(|| "N/A".into()),
-                mouse_sqr_pos.x, mouse_sqr_pos.y,
-                sqr::TileGrid::default().rect_to_linear_inv(mouse_sqr_pos).map(|v| v.to_string()).unwrap_or_else(|| "N/A".into()),
-                dude_pos.x, dude_pos.y,
-                world.hex_grid().rect_to_linear_inv(dude_pos).map(|v| v.to_string()).unwrap_or_else(|| "N/A".into()),
+                ui.cursor_pos().x,
+                ui.cursor_pos().y,
+                mouse_hex_pos.x,
+                mouse_hex_pos.y,
+                world
+                    .hex_grid()
+                    .rect_to_linear_inv(mouse_hex_pos)
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "N/A".into()),
+                mouse_sqr_pos.x,
+                mouse_sqr_pos.y,
+                sqr::TileGrid::default()
+                    .rect_to_linear_inv(mouse_sqr_pos)
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "N/A".into()),
+                dude_pos.x,
+                dude_pos.y,
+                world
+                    .hex_grid()
+                    .rect_to_linear_inv(dude_pos)
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "N/A".into()),
                 dude_dir,
                 world.ambient_light,
                 state.time().is_paused(),
             );
-            canvas.draw_text(msg.as_bytes().into(), Point::new(2, 1), FontKey::antialiased(1), GREEN,
+            canvas.draw_text(
+                msg.as_bytes().into(),
+                Point::new(2, 1),
+                FontKey::antialiased(1),
+                GREEN,
                 &font::DrawOptions {
                     dst_color: Some(BLACK),
-                    outline: Some(graphics::render::Outline::Fixed { color: BLACK, trans_color: None }),
-                    .. Default::default()
-                });
+                    outline: Some(graphics::render::Outline::Fixed {
+                        color: BLACK,
+                        trans_color: None,
+                    }),
+                    ..Default::default()
+                },
+            );
         }
 
         canvas.present();

@@ -1,8 +1,8 @@
-pub mod dat;
-pub mod std;
+use std::io::{BufRead, Error, ErrorKind, Result};
 
-use ::std::io::prelude::*;
-use ::std::io::{Error, ErrorKind, Result};
+pub mod dat;
+pub mod inifile;
+pub mod stdfs;
 
 #[derive(Clone, Debug)]
 pub struct Metadata {
@@ -21,7 +21,9 @@ pub struct FileSystem {
 
 impl FileSystem {
     pub fn new() -> Self {
-        FileSystem { providers: Vec::new() }
+        FileSystem {
+            providers: Vec::new(),
+        }
     }
 
     pub fn register_provider(&mut self, provider: Box<dyn Provider>) {
@@ -52,8 +54,9 @@ impl FileSystem {
                 }
             }
         }
-        Err(error.unwrap_or_else(|| Error::new(ErrorKind::NotFound,
-            format!("file not found: {}", path))))
+        Err(error.unwrap_or_else(|| {
+            Error::new(ErrorKind::NotFound, format!("file not found: {}", path))
+        }))
     }
 
     pub fn exists(&self, path: &str) -> bool {

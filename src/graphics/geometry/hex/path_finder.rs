@@ -2,10 +2,10 @@ use bit_vec::BitVec;
 use measure_time::*;
 use std::cmp;
 
-use crate::graphics::Point;
-use crate::graphics::geometry::hex;
-use crate::util::EnumExt;
 use super::*;
+use crate::graphics::geometry::hex;
+use crate::graphics::Point;
+use crate::util::EnumExt;
 
 #[derive(Debug)]
 struct Step {
@@ -50,10 +50,14 @@ impl PathFinder {
     /// If `smooth` is `true` it will add extra cost to changing of direction. This effectively
     /// attempts to decrease the number of turns in the path making smoother at the price of
     /// choosing sub-optimal route.
-    pub fn find(&mut self, from: Point, to: Point,
-            smooth: bool,
-            mut f: impl FnMut(Point) -> TileState) -> Option<Vec<Direction>> {
-        debug_time!("PathFinder::find()");
+    pub fn find(
+        &mut self,
+        from: Point,
+        to: Point,
+        smooth: bool,
+        mut f: impl FnMut(Point) -> TileState,
+    ) -> Option<Vec<Direction>> {
+        trace_time!("PathFinder::find()");
         if from == to {
             return Some(Vec::new());
         }
@@ -113,8 +117,11 @@ impl PathFinder {
                         }
                     }
 
-                    debug!("PathFinder::find(): steps.len()={} max_open_steps_len={}",
-                        self.steps.len(), max_open_steps_len);
+                    trace!(
+                        "PathFinder::find(): steps.len()={} max_open_steps_len={}",
+                        self.steps.len(),
+                        max_open_steps_len
+                    );
 
                     return Some(path);
                 }
@@ -138,7 +145,8 @@ impl PathFinder {
                 let next_cost = match f(next) {
                     TileState::Blocked => continue,
                     TileState::Passable(cost) => cost,
-                } + cost + 50;
+                } + cost
+                    + 50;
 
                 // Add penalty to changing of direction.
                 let next_cost = if smooth && next_direction != direction {
@@ -147,12 +155,15 @@ impl PathFinder {
                     next_cost
                 };
                 let existing_step = {
-                    self.open_steps.iter()
+                    self.open_steps
+                        .iter()
                         .enumerate()
-                        .filter_map(|(open_idx, &step_idx)| if self.steps[step_idx].pos == next {
-                            Some((open_idx, step_idx))
-                        } else {
-                            None
+                        .filter_map(|(open_idx, &step_idx)| {
+                            if self.steps[step_idx].pos == next {
+                                Some((open_idx, step_idx))
+                            } else {
+                                None
+                            }
                         })
                         .next()
                 };
@@ -175,15 +186,20 @@ impl PathFinder {
                 }
             }
         }
-        debug!("PathFinder::find(): steps.len()={} max_open_steps_len={}",
-            self.steps.len(), max_open_steps_len);
+        trace!(
+            "PathFinder::find(): steps.len()={} max_open_steps_len={}",
+            self.steps.len(),
+            max_open_steps_len
+        );
         None
     }
 
     fn open(&mut self, idx: usize) {
         let cost = self.steps[idx].total_cost();
-        let insert_idx = match self.open_steps
-                .binary_search_by(|&i| cost.cmp(&self.steps[i].total_cost())) {
+        let insert_idx = match self
+            .open_steps
+            .binary_search_by(|&i| cost.cmp(&self.steps[i].total_cost()))
+        {
             Ok(i) => i,
             Err(i) => i,
         };
@@ -196,11 +212,14 @@ impl PathFinder {
     }
 
     fn close(&mut self, pos: Point) {
-        self.closed.set(self.tile_grid.rect_to_linear(pos).unwrap() as usize, true);
+        self.closed
+            .set(self.tile_grid.rect_to_linear(pos).unwrap() as usize, true);
     }
 
     fn is_closed(&self, pos: Point) -> bool {
-        self.closed.get(self.tile_grid.rect_to_linear(pos).unwrap() as usize).unwrap()
+        self.closed
+            .get(self.tile_grid.rect_to_linear(pos).unwrap() as usize)
+            .unwrap()
     }
 
     fn estimate(&self, from: Point, to: Point) -> u32 {
@@ -236,9 +255,7 @@ mod test {
                     }
                 }),
                 TileStateFunc::Penalty(v) => Box::new(move |p| {
-                    if let Some((_, _, c)) = v.iter()
-                        .find(|(x, y, _)| Point::new(*x, *y) == p)
-                    {
+                    if let Some((_, _, c)) = v.iter().find(|(x, y, _)| Point::new(*x, *y) == p) {
                         TileState::Passable(*c)
                     } else {
                         TileState::Passable(0)
@@ -262,11 +279,14 @@ mod test {
             ((0, 1), (3, 1), NoBlock, Some(vec![E, E, NE])),
             ((0, 1), (3, 0), NoBlock, Some(vec![E, NE, NE])),
             ((1, 1), (1, 4), NoBlock, Some(vec![SE, SE, SE])),
-
             ((0, 0), (1, 1), Blocked(vec![(1, 0)]), Some(vec![SE, E])),
-            ((0, 0), (1, 1), Penalty(vec![(1, 0, 100)]), Some(vec![SE, E])),
+            (
+                (0, 0),
+                (1, 1),
+                Penalty(vec![(1, 0, 100)]),
+                Some(vec![SE, E]),
+            ),
             ((1, 1), (0, 0), Blocked(vec![(0, 1)]), Some(vec![NW, W])),
-
             ((0, 0), (1, 1), Blocked(vec![(0, 1), (1, 0)]), None),
             ((0, 0), (199, 199), AllBlocked, None),
         ];
@@ -279,22 +299,36 @@ mod test {
     fn smooth() {
         let mut t = PathFinder::new(TileGrid::default(), 5000);
         use self::Direction::*;
-        assert_eq!(t.find((2, 0).into(), (0, 3).into(), false, |_| TileState::Passable(0)),
-            Some(vec![SE, SW, SE, SW]));
-        assert_eq!(t.find((2, 0).into(), (0, 3).into(), true, |_| TileState::Passable(0)),
-            Some(vec![SE, SW, SW, SE]));
+        assert_eq!(
+            t.find(
+                (2, 0).into(),
+                (0, 3).into(),
+                false,
+                |_| TileState::Passable(0)
+            ),
+            Some(vec![SE, SW, SE, SW])
+        );
+        assert_eq!(
+            t.find((2, 0).into(), (0, 3).into(), true, |_| TileState::Passable(
+                0
+            )),
+            Some(vec![SE, SW, SW, SE])
+        );
     }
 
     #[test]
     fn max_depth() {
         let mut t = PathFinder::new(TileGrid::default(), 10);
-        assert_eq!(t.find((2, 0).into(), (0, 0).into(), false,
-            |p| if p == Point::new(1, 0) || p == Point::new(0, 1) {
-                TileState::Blocked
-            } else {
-                TileState::Passable(0)
+        assert_eq!(
+            t.find((2, 0).into(), (0, 0).into(), false, |p| {
+                if p == Point::new(1, 0) || p == Point::new(0, 1) {
+                    TileState::Blocked
+                } else {
+                    TileState::Passable(0)
+                }
             }),
-            None);
+            None
+        );
         assert_eq!(t.steps.len(), 10);
     }
 }

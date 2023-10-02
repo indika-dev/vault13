@@ -3,51 +3,51 @@ use enum_map::{enum_map, EnumMap};
 use if_chain::if_chain;
 use log::*;
 use measure_time::*;
-use sdl2::event::{Event as SdlEvent};
+use sdl2::event::Event as SdlEvent;
 use sdl2::keyboard::Keycode;
 use std::cell::RefCell;
 use std::cmp;
 use std::rc::Rc;
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
-use crate::asset::{self, *};
 use crate::asset::frame::{FrameDb, FrameId};
-use crate::asset::map::{ELEVATION_COUNT, MapId, MapReader};
 use crate::asset::map::db::MapDb;
-use crate::asset::message::{BULLET, Messages};
+use crate::asset::map::{MapId, MapReader, ELEVATION_COUNT};
+use crate::asset::message::{Messages, BULLET};
 use crate::asset::proto::*;
 use crate::asset::script::db::ScriptDb;
+use crate::asset::{self, *};
 use crate::fs::FileSystem;
 use crate::game::dialog::Dialog;
 use crate::game::fidget::Fidget;
 use crate::game::inventory::Inventory;
 use crate::game::object::{self, *};
 use crate::game::rpg::Rpg;
-use crate::game::sequence::ObjSequencer;
+use crate::game::script::{self, ScriptKind, Scripts};
 use crate::game::sequence::frame_anim::{AnimDirection, FrameAnim, FrameAnimOptions};
 use crate::game::sequence::move_seq::Move;
 use crate::game::sequence::stand::Stand;
-use crate::game::script::{self, Scripts, ScriptKind};
+use crate::game::sequence::ObjSequencer;
 use crate::game::skilldex::{self, Skilldex};
 use crate::game::ui::action_menu::{self, Action};
 use crate::game::ui::hud;
 use crate::game::ui::scroll_area::ScrollArea;
 use crate::game::ui::world::{HexCursorStyle, WorldView};
 use crate::game::world::{ScrollDirection, World, WorldRef};
-use crate::graphics::{EPoint, Rect};
 use crate::graphics::font::Fonts;
 use crate::graphics::geometry::hex::{self, Direction};
-use crate::sequence::{self, Sequencer};
-use crate::sequence::event::PushEvent;
+use crate::graphics::{EPoint, Rect};
 use crate::sequence::chain::Chain;
+use crate::sequence::event::PushEvent;
+use crate::sequence::{self, Sequencer};
 use crate::state::{self, *};
-use crate::ui::{self, Ui};
-use crate::ui::command::*;
 use crate::ui::command::inventory::Command;
+use crate::ui::command::*;
 use crate::ui::message_panel::MessagePanel;
-use crate::util::{EnumExt, sprintf};
+use crate::ui::{self, Ui};
 use crate::util::random::random;
-use crate::vm::{Vm, PredefinedProc, Suspend};
+use crate::util::{sprintf, EnumExt};
+use crate::vm::{PredefinedProc, Suspend, Vm};
 
 const SCROLL_STEP: i32 = 10;
 
@@ -102,7 +102,8 @@ impl GameState {
         let scripts = Scripts::new(
             proto_db.clone(),
             ScriptDb::new(fs.clone(), language).unwrap(),
-            Vm::default());
+            Vm::default(),
+        );
         let world = World::new(
             proto_db.clone(),
             frm_db.clone(),
@@ -110,7 +111,8 @@ impl GameState {
             hex_grid,
             viewport,
             now,
-            fonts);
+            fonts,
+        );
         let world = Rc::new(RefCell::new(world));
         let obj_sequencer = ObjSequencer::new(now);
         let fidget = Fidget::new(now);
@@ -118,7 +120,13 @@ impl GameState {
         let world_view_rect = Rect::with_size(0, 0, 640, 379);
         let world_view = {
             let win = ui.new_window(world_view_rect, None);
-            ui.new_widget(win, world_view_rect, None, None, WorldView::new(world.clone()))
+            ui.new_widget(
+                win,
+                world_view_rect,
+                None,
+                None,
+                WorldView::new(world.clone()),
+            )
         };
         let message_panel = hud::create(ui);
 
@@ -175,7 +183,9 @@ impl GameState {
 
     pub fn new_game(&mut self) {
         self.scripts.vars.global_vars =
-            asset::read_game_global_vars(&mut self.fs.reader("data/vault13.gam").unwrap()).unwrap().into();
+            asset::read_game_global_vars(&mut self.fs.reader("data/vault13.gam").unwrap())
+                .unwrap()
+                .into();
 
         let dude_fid = FrameId::from_packed(0x100003E).unwrap();
         //    let dude_fid = FrameId::from_packed(0x101600A).unwrap();
@@ -183,10 +193,17 @@ impl GameState {
             Some(dude_fid),
             Some(self.proto_db.dude()),
             Some(Default::default()),
-            Some(&self.rpg));
+            Some(&self.rpg),
+        );
 
         // TODO replace with proper init
-        self.world.borrow_mut().objects_mut().dude_mut().sub.as_critter_mut().unwrap()
+        self.world
+            .borrow_mut()
+            .objects_mut()
+            .dude_mut()
+            .sub
+            .as_critter_mut()
+            .unwrap()
             .hit_points = 44;
         let d = self.proto_db.dude();
         let mut d = d.borrow_mut();
@@ -237,7 +254,8 @@ impl GameState {
         self.obj_sequencer.clear();
 
         // Reinsert the hex cursor. Needs `world` to be not borrowed.
-        ui.widget_mut::<WorldView>(self.world_view).ensure_hex_cursor();
+        ui.widget_mut::<WorldView>(self.world_view)
+            .ensure_hex_cursor();
 
         let world = &mut self.world.borrow_mut();
 
@@ -247,17 +265,24 @@ impl GameState {
             proto_db: &self.proto_db,
             frm_db: &self.frm_db,
             scripts: &mut self.scripts,
-        }.read().unwrap();
+        }
+        .read()
+        .unwrap();
 
         self.map_id = Some(map.id);
 
         for elev in &map.sqr_tiles {
             if let Some(ref elev) = elev {
                 for &(floor, roof) in elev.as_slice() {
-                    self.frm_db.get(FrameId::new_generic(EntityKind::SqrTile, floor).unwrap()).unwrap();
-                    self.frm_db.get(FrameId::new_generic(EntityKind::SqrTile, roof).unwrap()).unwrap();
+                    self.frm_db
+                        .get(FrameId::new_generic(EntityKind::SqrTile, floor).unwrap())
+                        .unwrap();
+                    self.frm_db
+                        .get(FrameId::new_generic(EntityKind::SqrTile, roof).unwrap())
+                        .unwrap();
                 }
-            } else {}
+            } else {
+            }
         }
 
         fn for_each_direction(fid: FrameId, mut f: impl FnMut(FrameId)) {
@@ -282,7 +307,7 @@ impl GameState {
         world.set_sqr_tiles(map.sqr_tiles);
 
         {
-            let mut dude_obj = dude_obj.objects.get_mut(dude_obj.root).unwrap();
+            let dude_obj = dude_obj.objects.get_mut(dude_obj.root).unwrap();
             dude_obj.direction = map.entrance_direction;
             dude_obj.set_light_emitter(LightEmitter {
                 intensity: 0x10000,
@@ -298,7 +323,9 @@ impl GameState {
             assert!(!map.savegame);
             let path = format!("maps/{}.gam", map_name);
             self.scripts.vars.map_vars = if self.fs.exists(&path) {
-                asset::read_map_global_vars(&mut self.fs.reader(&path).unwrap()).unwrap().into()
+                asset::read_map_global_vars(&mut self.fs.reader(&path).unwrap())
+                    .unwrap()
+                    .into()
             } else {
                 Vec::new().into()
             };
@@ -322,26 +349,27 @@ impl GameState {
             // PredefinedProc::Start for map script is never called.
             // MapEnter in map script is called before anything else.
             if let Some(sid) = self.scripts.map_sid() {
-                self.scripts.execute_predefined_proc(sid, PredefinedProc::MapEnter, ctx)
+                self.scripts
+                    .execute_predefined_proc(sid, PredefinedProc::MapEnter, ctx)
                     .map(|r| r.suspend.map(|_| panic!("can't suspend in MapEnter")));
             }
 
-            self.scripts.execute_procs(PredefinedProc::Start, ctx, |sid| sid.kind() != ScriptKind::System);
-            self.scripts.execute_map_procs(PredefinedProc::MapEnter, ctx);
-            self.scripts.execute_map_procs(PredefinedProc::MapUpdate, ctx);
+            self.scripts
+                .execute_procs(PredefinedProc::Start, ctx, |sid| {
+                    sid.kind() != ScriptKind::System
+                });
+            self.scripts
+                .execute_map_procs(PredefinedProc::MapEnter, ctx);
+            self.scripts
+                .execute_map_procs(PredefinedProc::MapUpdate, ctx);
         }
 
         world.camera_look_at_dude();
     }
 
-    fn handle_action(
-        &mut self,
-        ui: &mut Ui,
-        obj: object::Handle,
-        action: Action,
-    ) {
+    fn handle_action(&mut self, ui: &mut Ui, obj: object::Handle, action: Action) {
         match action {
-            Action::Cancel => {},
+            Action::Cancel => {}
             Action::Drop | Action::Unload => unreachable!(),
             Action::Inventory => {
                 // TODO
@@ -402,7 +430,11 @@ impl GameState {
                 Use { user, used } => {
                     self.use_obj(user, used, ctx.ui);
                 }
-                UseSkill { skill, user, target } => {
+                UseSkill {
+                    skill,
+                    user,
+                    target,
+                } => {
                     self.use_skill_on(skill, user, target, ctx.ui);
                 }
             }
@@ -423,15 +455,23 @@ impl GameState {
                         if !self.in_combat {
                             r.push(Action::Talk);
                         }
-                    } else if !obj.proto().unwrap()
-                        .sub.as_critter().unwrap()
-                        .flags.contains(CritterFlag::NoSteal)
+                    } else if !obj
+                        .proto()
+                        .unwrap()
+                        .sub
+                        .as_critter()
+                        .unwrap()
+                        .flags
+                        .contains(CritterFlag::NoSteal)
                     {
                         r.push(Action::UseHand);
                     }
-                    if world.objects().can_push(world.objects().dude(), objh,
-                        &self.scripts, self.in_combat)
-                    {
+                    if world.objects().can_push(
+                        world.objects().dude(),
+                        objh,
+                        &self.scripts,
+                        self.in_combat,
+                    ) {
                         r.push(Action::Push);
                     }
                 }
@@ -465,9 +505,12 @@ impl GameState {
             .collect()
     }
 
-    fn look_at_object(&mut self, looker: object::Handle, looked: object::Handle, ui: &mut Ui)
-        -> Option<BString>
-    {
+    fn look_at_object(
+        &mut self,
+        looker: object::Handle,
+        looked: object::Handle,
+        ui: &mut Ui,
+    ) -> Option<BString> {
         let sid = {
             let world = self.world.borrow();
             let lookero = world.objects().get(looker);
@@ -507,7 +550,12 @@ impl GameState {
 
         let world = self.world.borrow();
         let lookedo = world.objects().get(looked);
-        let msg_id = if lookedo.sub.as_critter().map(|c| c.is_dead()).unwrap_or(false) {
+        let msg_id = if lookedo
+            .sub
+            .as_critter()
+            .map(|c| c.is_dead())
+            .unwrap_or(false)
+        {
             491 + random(0, 1)
         } else {
             490
@@ -531,9 +579,12 @@ impl GameState {
     }
 
     // obj_examine_func()
-    fn examine_object(&mut self, examiner: object::Handle, examined: object::Handle, ui: &mut Ui)
-        -> Vec<BString>
-    {
+    fn examine_object(
+        &mut self,
+        examiner: object::Handle,
+        examined: object::Handle,
+        ui: &mut Ui,
+    ) -> Vec<BString> {
         let sid = {
             let world = self.world.borrow();
             let examinero = world.objects().get(examiner);
@@ -575,8 +626,14 @@ impl GameState {
         if !script_overrides {
             let world = self.world.borrow();
             let examinedo = world.objects().get(examined);
-            if !examinedo.sub.as_critter().map(|c| c.is_dead()).unwrap_or(false) {
-                let descr = examinedo.proto()
+            if !examinedo
+                .sub
+                .as_critter()
+                .map(|c| c.is_dead())
+                .unwrap_or(false)
+            {
+                let descr = examinedo
+                    .proto()
                     .and_then(|p| {
                         p.description()
                             .filter(|s| {
@@ -622,8 +679,13 @@ impl GameState {
                 objs.is_shot_blocked(talker, talked)
             {
                 let chain = Chain::new();
-                chain.control()
-                    .cancellable(Move::new(talker, PathTo::Object(talked), CritterAnim::Running))
+                chain
+                    .control()
+                    .cancellable(Move::new(
+                        talker,
+                        PathTo::Object(talked),
+                        CritterAnim::Running,
+                    ))
                     .finalizing(Stand::new(talker))
                     .finalizing(PushEvent::new(sequence::Event::Talk { talker, talked }));
                 self.obj_sequencer.replace(talker, chain);
@@ -639,28 +701,31 @@ impl GameState {
         if self.world.borrow().objects().can_talk_now(talker, talked) {
             let world = &mut self.world.borrow_mut();
             self.obj_sequencer.clear();
-            self.obj_sequencer.sync(&mut sequence::Sync {
-                world,
-                ui,
-            });
+            self.obj_sequencer.sync(&mut sequence::Sync { world, ui });
             let script = world.objects().get(talked).script;
             if let Some((sid, _)) = script {
-                match self.scripts.execute_predefined_proc(sid, PredefinedProc::Talk,
-                    &mut script::Context {
-                        world,
-                        obj_sequencer: &mut self.obj_sequencer,
-                        dialog: &mut self.dialog,
-                        ui,
-                        message_panel: self.message_panel,
-                        map_id: self.map_id.unwrap(),
-                        source_obj: Some(talker),
-                        target_obj: Some(talked),
-                        skill: None,
-                        rpg: &mut self.rpg,
-                    }).and_then(|r| r.suspend)
-                    {
-                        None | Some(Suspend::GsayEnd) => {}
-                    }
+                match self
+                    .scripts
+                    .execute_predefined_proc(
+                        sid,
+                        PredefinedProc::Talk,
+                        &mut script::Context {
+                            world,
+                            obj_sequencer: &mut self.obj_sequencer,
+                            dialog: &mut self.dialog,
+                            ui,
+                            message_panel: self.message_panel,
+                            map_id: self.map_id.unwrap(),
+                            source_obj: Some(talker),
+                            target_obj: Some(talked),
+                            skill: None,
+                            rpg: &mut self.rpg,
+                        },
+                    )
+                    .and_then(|r| r.suspend)
+                {
+                    None | Some(Suspend::GsayEnd) => {}
+                }
             }
         } else {
             assert_eq!(talker, self.world.borrow().objects().dude());
@@ -689,32 +754,49 @@ impl GameState {
         } else {
             CritterAnim::Running
         };
-        seq.control().cancellable(Move::new(user, PathTo::Object(used), move_anim));
+        seq.control()
+            .cancellable(Move::new(user, PathTo::Object(used), move_anim));
 
         let weapon = usero.fid.critter().unwrap().weapon();
         if weapon != WeaponKind::Unarmed {
-            seq.control().cancellable(FrameAnim::new(user,
-                FrameAnimOptions { anim: Some(CritterAnim::PutAway), ..Default::default() }));
+            seq.control().cancellable(FrameAnim::new(
+                user,
+                FrameAnimOptions {
+                    anim: Some(CritterAnim::PutAway),
+                    ..Default::default()
+                },
+            ));
         }
 
         if used_kind != ExactEntityKind::Scenery(SceneryKind::Stairs) {
             // FIXME must call check_next_to() before running this animation
-            let use_anim = if usedo.is_critter_prone() ||
-                usedo.kind() == EntityKind::Scenery &&
-                    usedo.proto().unwrap().flags_ext.contains(FlagExt::Prone)
+            let use_anim = if usedo.is_critter_prone()
+                || usedo.kind() == EntityKind::Scenery
+                    && usedo.proto().unwrap().flags_ext.contains(FlagExt::Prone)
             {
                 CritterAnim::MagicHandsGround
             } else {
                 CritterAnim::MagicHandsMiddle
             };
-            seq.control().cancellable(FrameAnim::new(user,
-                FrameAnimOptions { anim: Some(use_anim), ..Default::default() }));
+            seq.control().cancellable(FrameAnim::new(
+                user,
+                FrameAnimOptions {
+                    anim: Some(use_anim),
+                    ..Default::default()
+                },
+            ));
         }
 
-        seq.control().cancellable(PushEvent::new(sequence::Event::Use { user, used }));
+        seq.control()
+            .cancellable(PushEvent::new(sequence::Event::Use { user, used }));
         if weapon != WeaponKind::Unarmed {
-            seq.control().cancellable(FrameAnim::new(user,
-                FrameAnimOptions { anim: Some(CritterAnim::TakeOut), ..Default::default() }));
+            seq.control().cancellable(FrameAnim::new(
+                user,
+                FrameAnimOptions {
+                    anim: Some(CritterAnim::TakeOut),
+                    ..Default::default()
+                },
+            ));
         }
         seq.control().finalizing(Stand::new(user));
 
@@ -752,19 +834,26 @@ impl GameState {
             let world = &mut self.world.borrow_mut();
 
             let script_overrides = if let Some((sid, _)) = script {
-                self.scripts.execute_predefined_proc(sid, PredefinedProc::Use,
-                    &mut script::Context {
-                        world,
-                        obj_sequencer: &mut self.obj_sequencer,
-                        dialog: &mut self.dialog,
-                        ui,
-                        message_panel: self.message_panel,
-                        map_id: self.map_id.unwrap(),
-                        source_obj: Some(user),
-                        target_obj: Some(used),
-                        skill: None,
-                        rpg: &mut self.rpg,
-                    }).unwrap().assert_no_suspend().script_overrides
+                self.scripts
+                    .execute_predefined_proc(
+                        sid,
+                        PredefinedProc::Use,
+                        &mut script::Context {
+                            world,
+                            obj_sequencer: &mut self.obj_sequencer,
+                            dialog: &mut self.dialog,
+                            ui,
+                            message_panel: self.message_panel,
+                            map_id: self.map_id.unwrap(),
+                            source_obj: Some(user),
+                            target_obj: Some(used),
+                            skill: None,
+                            rpg: &mut self.rpg,
+                        },
+                    )
+                    .unwrap()
+                    .assert_no_suspend()
+                    .script_overrides
             } else {
                 false
             };
@@ -772,11 +861,10 @@ impl GameState {
                 match used_kind {
                     SceneryKind::Door => unreachable!(),
                     // TODO
-                    | SceneryKind::Stairs
+                    SceneryKind::Stairs
                     | SceneryKind::Elevator
                     | SceneryKind::LadderDown
-                    | SceneryKind::LadderUp
-                    => {
+                    | SceneryKind::LadderUp => {
                         warn!("{:?} use is not implemented", used_kind);
                         false
                     }
@@ -807,34 +895,56 @@ impl GameState {
         };
 
         if let Some((sid, _)) = script {
-            let script_overrides = self.scripts.execute_predefined_proc(sid, PredefinedProc::Use,
-                &mut script::Context {
-                    world,
-                    obj_sequencer: &mut self.obj_sequencer,
-                    dialog: &mut self.dialog,
-                    ui,
-                    message_panel: self.message_panel,
-                    map_id: self.map_id.unwrap(),
-                    source_obj: Some(user),
-                    target_obj: Some(door),
-                    skill: None,
-                    rpg: &mut self.rpg,
-                }).unwrap().assert_no_suspend().script_overrides;
+            let script_overrides = self
+                .scripts
+                .execute_predefined_proc(
+                    sid,
+                    PredefinedProc::Use,
+                    &mut script::Context {
+                        world,
+                        obj_sequencer: &mut self.obj_sequencer,
+                        dialog: &mut self.dialog,
+                        ui,
+                        message_panel: self.message_panel,
+                        map_id: self.map_id.unwrap(),
+                        source_obj: Some(user),
+                        target_obj: Some(door),
+                        skill: None,
+                        rpg: &mut self.rpg,
+                    },
+                )
+                .unwrap()
+                .assert_no_suspend()
+                .script_overrides;
             if script_overrides {
                 return;
             }
         }
 
         let dooro = world.objects().get(door);
-        let need_open = if dooro.frame_idx > 0 { // Indicates the door is open
+        let need_open = if dooro.frame_idx > 0 {
+            // Indicates the door is open
             if world.objects().has_blocker_at(dooro.pos(), None) {
-                let msg = &self.proto_db.messages().get(MSG_DOORWAY_SEEMS_TO_BE_BLOCKED).unwrap().text;
+                let msg = &self
+                    .proto_db
+                    .messages()
+                    .get(MSG_DOORWAY_SEEMS_TO_BE_BLOCKED)
+                    .unwrap()
+                    .text;
                 self.push_message(msg, ui);
-                return
+                return;
             }
             false
         } else {
-            if dooro.sub.as_scenery().unwrap().as_door().unwrap().flags.contains(DoorFlag::Open) {
+            if dooro
+                .sub
+                .as_scenery()
+                .unwrap()
+                .as_door()
+                .unwrap()
+                .flags
+                .contains(DoorFlag::Open)
+            {
                 return;
             }
             true
@@ -842,12 +952,22 @@ impl GameState {
 
         let seq = Chain::new();
         seq.control()
-            .cancellable(FrameAnim::new(door, FrameAnimOptions {
-                direction: if need_open { AnimDirection::Forward } else { AnimDirection::Backward },
-                skip: 1,
-                ..Default::default()
-            }))
-            .finalizing(PushEvent::new(sequence::Event::SetDoorState { door, open: need_open }));
+            .cancellable(FrameAnim::new(
+                door,
+                FrameAnimOptions {
+                    direction: if need_open {
+                        AnimDirection::Forward
+                    } else {
+                        AnimDirection::Backward
+                    },
+                    skip: 1,
+                    ..Default::default()
+                },
+            ))
+            .finalizing(PushEvent::new(sequence::Event::SetDoorState {
+                door,
+                open: need_open,
+            }));
 
         self.obj_sequencer.replace(door, seq);
     }
@@ -867,17 +987,24 @@ impl GameState {
                     }
                 }
                 if open {
-                    dooro.flags.insert(Flag::ShootThru | Flag::LightThru | Flag::NoBlock);
+                    dooro
+                        .flags
+                        .insert(Flag::ShootThru | Flag::LightThru | Flag::NoBlock);
                 } else {
-                    dooro.flags.remove(Flag::ShootThru | Flag::LightThru | Flag::NoBlock);
+                    dooro
+                        .flags
+                        .remove(Flag::ShootThru | Flag::LightThru | Flag::NoBlock);
                 }
             }
 
-            world.objects_mut().set_frame(door, if open {
-                SetFrame::Last
-            } else {
-                SetFrame::Index(0)
-            });
+            world.objects_mut().set_frame(
+                door,
+                if open {
+                    SetFrame::Last
+                } else {
+                    SetFrame::Index(0)
+                },
+            );
         }
         world.objects_mut().rebuild_light_grid();
     }
@@ -896,8 +1023,18 @@ impl GameState {
     fn create_scroll_areas(rect: Rect, ui: &mut Ui) -> EnumMap<ScrollDirection, ui::Handle> {
         let mut new = |rect, cur, curx| {
             let win = ui.new_window(rect, None);
-            ui.new_widget(win, Rect::with_size(0, 0, rect.width(), rect.height()), None, None,
-                ScrollArea::new(cur, curx, Duration::from_millis(0), Duration::from_millis(30)))
+            ui.new_widget(
+                win,
+                Rect::with_size(0, 0, rect.width(), rect.height()),
+                None,
+                None,
+                ScrollArea::new(
+                    cur,
+                    curx,
+                    Duration::from_millis(0),
+                    Duration::from_millis(30),
+                ),
+            )
         };
         use ui::Cursor::*;
         use ScrollDirection::*;
@@ -951,7 +1088,8 @@ impl GameState {
                 skill: None,
                 rpg: &mut self.rpg,
             };
-            self.scripts.execute_map_procs(PredefinedProc::MapUpdate, ctx);
+            self.scripts
+                .execute_map_procs(PredefinedProc::MapUpdate, ctx);
         }
         world.camera_look_at_dude();
     }
@@ -959,8 +1097,9 @@ impl GameState {
     fn show_skilldex(&mut self, ui: &mut Ui, target: Option<object::Handle>) {
         let world = self.world.borrow();
         let dude_obj = world.objects().get(world.objects().dude());
-        let levels = EnumMap::from(
-            |skill: skilldex::Skill| self.rpg.skill(skill.into(), &dude_obj, world.objects()));
+        let levels = EnumMap::from(|skill: skilldex::Skill| {
+            self.rpg.skill(skill.into(), &dude_obj, world.objects())
+        });
         self.skilldex.show(ui, levels, target);
     }
 
@@ -978,7 +1117,10 @@ impl GameState {
                 match targeto.kind() {
                     EntityKind::Item | EntityKind::Scenery => {}
                     _ => {
-                        debug!("{:?} can't use Lockpick on non-item/non-scenery {:?}", user, target);
+                        debug!(
+                            "{:?} can't use Lockpick on non-item/non-scenery {:?}",
+                            user, target
+                        );
                         return;
                     }
                 }
@@ -1000,7 +1142,8 @@ impl GameState {
         } else {
             CritterAnim::Running
         };
-        seq.control().cancellable(Move::new(user, PathTo::Object(target), move_anim));
+        seq.control()
+            .cancellable(Move::new(user, PathTo::Object(target), move_anim));
 
         let use_anim = if targeto.is_critter_prone() {
             CritterAnim::MagicHandsGround
@@ -1009,16 +1152,26 @@ impl GameState {
         };
         // FIXME must call check_next_to() before running this animation
         seq.control()
-            .cancellable(FrameAnim::new(user,
-                FrameAnimOptions { anim: Some(use_anim), ..Default::default() }))
-            .cancellable(PushEvent::new(sequence::Event::UseSkill { skill, user, target }))
+            .cancellable(FrameAnim::new(
+                user,
+                FrameAnimOptions {
+                    anim: Some(use_anim),
+                    ..Default::default()
+                },
+            ))
+            .cancellable(PushEvent::new(sequence::Event::UseSkill {
+                skill,
+                user,
+                target,
+            }))
             .finalizing(Stand::new(user));
 
         self.obj_sequencer.replace(user, seq);
     }
 
     // obj_use_skill_on
-    fn use_skill_on(&mut self,
+    fn use_skill_on(
+        &mut self,
         skill: Skill,
         user: object::Handle,
         target: object::Handle,
@@ -1028,8 +1181,7 @@ impl GameState {
             let world = &mut self.world.borrow_mut();
             let script = {
                 let targeto = world.objects().get(target);
-                if user == world.objects().dude() && targeto.is_lock_jammed() == Some(true)
-                {
+                if user == world.objects().dude() && targeto.is_lock_jammed() == Some(true) {
                     let msg = &self.misc_msgs.get(2001).unwrap().text;
                     self.push_message(msg, ui);
                     return;
@@ -1038,19 +1190,26 @@ impl GameState {
             };
 
             if let Some((sid, _)) = script {
-                self.scripts.execute_predefined_proc(sid, PredefinedProc::UseSkillOn,
-                    &mut script::Context {
-                        world,
-                        obj_sequencer: &mut self.obj_sequencer,
-                        dialog: &mut self.dialog,
-                        ui,
-                        message_panel: self.message_panel,
-                        map_id: self.map_id.unwrap(),
-                        source_obj: Some(user),
-                        target_obj: Some(target),
-                        skill: Some(skill),
-                        rpg: &mut self.rpg,
-                    }).unwrap().assert_no_suspend().script_overrides
+                self.scripts
+                    .execute_predefined_proc(
+                        sid,
+                        PredefinedProc::UseSkillOn,
+                        &mut script::Context {
+                            world,
+                            obj_sequencer: &mut self.obj_sequencer,
+                            dialog: &mut self.dialog,
+                            ui,
+                            message_panel: self.message_panel,
+                            map_id: self.map_id.unwrap(),
+                            source_obj: Some(user),
+                            target_obj: Some(target),
+                            skill: Some(skill),
+                            rpg: &mut self.rpg,
+                        },
+                    )
+                    .unwrap()
+                    .assert_no_suspend()
+                    .script_overrides
             } else {
                 false
             }
@@ -1060,7 +1219,8 @@ impl GameState {
         }
     }
 
-    fn default_use_skill_on(&mut self,
+    fn default_use_skill_on(
+        &mut self,
         skill: Skill,
         _user: object::Handle,
         target: object::Handle,
@@ -1090,7 +1250,11 @@ impl GameState {
                 }
                 Skill::Sneak | Skill::Lockpick => {}
                 Skill::Repair => {
-                    if targeto.proto().and_then(|p| p.sub.as_critter().map(|c| c.body_kind)) != Some(BodyKind::Robotic) {
+                    if targeto
+                        .proto()
+                        .and_then(|p| p.sub.as_critter().map(|c| c.body_kind))
+                        != Some(BodyKind::Robotic)
+                    {
                         self.push_message(&self.rpg.skill_msgs().get(553).unwrap().text, ui);
                         return;
                     }
@@ -1124,49 +1288,68 @@ impl AppState for GameState {
         match ctx.event {
             // map_check_state
             // TODO handle special map ids: 19, 37
-            AppEvent::MapExit { map, pos, direction } => {
-                match map {
-                    TargetMap::CurrentMap => {
-                        self.set_dude_pos(pos, direction, ctx.ui);
-                    }
-                    TargetMap::Map { map_id } => {
-                        if self.map_id.unwrap() != map_id {
-                            let map_def = self.map_db.get(map_id).unwrap();
-                            let name = map_def.name.clone();
-                            self.switch_map(&name, ctx.ui);
-                        }
-                        self.set_dude_pos(pos, direction, ctx.ui);
-                    }
-                    TargetMap::WorldMap(k) => {
-                        warn!("map exit to {:?} is not implemented", k);
-                    }
+            AppEvent::MapExit {
+                map,
+                pos,
+                direction,
+            } => match map {
+                TargetMap::CurrentMap => {
+                    self.set_dude_pos(pos, direction, ctx.ui);
                 }
-            }
+                TargetMap::Map { map_id } => {
+                    if self.map_id.unwrap() != map_id {
+                        let map_def = self.map_db.get(map_id).unwrap();
+                        let name = map_def.name.clone();
+                        self.switch_map(&name, ctx.ui);
+                    }
+                    self.set_dude_pos(pos, direction, ctx.ui);
+                }
+                TargetMap::WorldMap(k) => {
+                    warn!("map exit to {:?} is not implemented", k);
+                }
+            },
         }
     }
 
     fn handle_input(&mut self, event: &SdlEvent, ui: &mut Ui) -> bool {
         let mut world = self.world.borrow_mut();
         match event {
-            SdlEvent::KeyDown { keycode: Some(Keycode::Right), .. } => {
+            SdlEvent::KeyDown {
+                keycode: Some(Keycode::Right),
+                ..
+            } => {
                 world.scroll(ScrollDirection::E, 1);
             }
-            SdlEvent::KeyDown { keycode: Some(Keycode::Left), .. } => {
+            SdlEvent::KeyDown {
+                keycode: Some(Keycode::Left),
+                ..
+            } => {
                 world.scroll(ScrollDirection::W, 1);
             }
-            SdlEvent::KeyDown { keycode: Some(Keycode::Up), .. } => {
+            SdlEvent::KeyDown {
+                keycode: Some(Keycode::Up),
+                ..
+            } => {
                 world.scroll(ScrollDirection::N, 1);
             }
-            SdlEvent::KeyDown { keycode: Some(Keycode::Down), .. } => {
+            SdlEvent::KeyDown {
+                keycode: Some(Keycode::Down),
+                ..
+            } => {
                 world.scroll(ScrollDirection::S, 1);
             }
-            SdlEvent::KeyDown { keycode: Some(Keycode::A), .. } => {
+            SdlEvent::KeyDown {
+                keycode: Some(Keycode::A),
+                ..
+            } => {
                 let dude_obj = world.objects().dude();
                 let new_pos = {
                     let obj = world.objects().get_mut(dude_obj);
                     let mut new_pos = obj.pos();
                     new_pos.elevation += 1;
-                    while new_pos.elevation < ELEVATION_COUNT && !world.has_elevation(new_pos.elevation) {
+                    while new_pos.elevation < ELEVATION_COUNT
+                        && !world.has_elevation(new_pos.elevation)
+                    {
                         new_pos.elevation += 1;
                     }
                     new_pos
@@ -1175,7 +1358,10 @@ impl AppState for GameState {
                     world.objects_mut().set_pos(dude_obj, Some(new_pos));
                 }
             }
-            SdlEvent::KeyDown { keycode: Some(Keycode::Z), .. } => {
+            SdlEvent::KeyDown {
+                keycode: Some(Keycode::Z),
+                ..
+            } => {
                 let dude_obj = world.objects().dude();
                 let new_pos = {
                     let obj = world.objects().get_mut(dude_obj);
@@ -1192,31 +1378,56 @@ impl AppState for GameState {
                     world.objects_mut().set_pos(dude_obj, Some(new_pos));
                 }
             }
-            SdlEvent::KeyDown { keycode: Some(Keycode::LeftBracket), .. } => {
+            SdlEvent::KeyDown {
+                keycode: Some(Keycode::LeftBracket),
+                ..
+            } => {
                 world.ambient_light = cmp::max(world.ambient_light as i32 - 1000, 0) as u32;
             }
-            SdlEvent::KeyDown { keycode: Some(Keycode::RightBracket), .. } => {
+            SdlEvent::KeyDown {
+                keycode: Some(Keycode::RightBracket),
+                ..
+            } => {
                 world.ambient_light = cmp::min(world.ambient_light + 1000, 0x10000);
             }
-            SdlEvent::KeyDown { keycode: Some(Keycode::R), .. } => {
+            SdlEvent::KeyDown {
+                keycode: Some(Keycode::R),
+                ..
+            } => {
                 let mut wv = ui.widget_mut::<WorldView>(self.world_view);
                 wv.roof_visible = !wv.roof_visible;
             }
-            SdlEvent::KeyDown { keycode: Some(Keycode::P), .. } => {
+            SdlEvent::KeyDown {
+                keycode: Some(Keycode::P),
+                ..
+            } => {
                 self.user_paused = !self.user_paused;
             }
 
-            SdlEvent::KeyDown { keycode: Some(Keycode::LShift), .. } |
-            SdlEvent::KeyDown { keycode: Some(Keycode::RShift), .. } => self.shift_key_down = true,
-            SdlEvent::KeyUp { keycode: Some(Keycode::LShift), .. } |
-            SdlEvent::KeyUp { keycode: Some(Keycode::RShift), .. } => self.shift_key_down = false,
+            SdlEvent::KeyDown {
+                keycode: Some(Keycode::LShift),
+                ..
+            }
+            | SdlEvent::KeyDown {
+                keycode: Some(Keycode::RShift),
+                ..
+            } => self.shift_key_down = true,
+            SdlEvent::KeyUp {
+                keycode: Some(Keycode::LShift),
+                ..
+            }
+            | SdlEvent::KeyUp {
+                keycode: Some(Keycode::RShift),
+                ..
+            } => self.shift_key_down = false,
             _ => return false,
         }
         true
     }
 
     fn handle_ui_command(&mut self, command: UiCommand, ui: &mut Ui) {
-        self.inventory.handle(command, &self.rpg, ui, &mut self.ui_sequencer);
+        self.inventory
+            .handle(command, &self.rpg, ui, &mut self.ui_sequencer);
 
         match command.data {
             UiCommandData::ObjectPick { kind, obj: objh } => {
@@ -1226,9 +1437,10 @@ impl AppState for GameState {
                     ObjectPickKind::Hover => {
                         // TODO highlight item on Action::UseHand: gmouse_bk_process()
 
-                        ui.widget_mut::<WorldView>(self.world_view).default_action_icon = if self.object_action_menu.is_none() {
+                        ui.widget_mut::<WorldView>(self.world_view)
+                            .default_action_icon = if self.object_action_menu.is_none() {
                             default_action
-                        }  else {
+                        } else {
                             None
                         };
 
@@ -1238,7 +1450,8 @@ impl AppState for GameState {
                         }
                     }
                     ObjectPickKind::ActionMenu => {
-                        ui.widget_mut::<WorldView>(self.world_view).default_action_icon = None;
+                        ui.widget_mut::<WorldView>(self.world_view)
+                            .default_action_icon = None;
 
                         let world_view_win = ui.window_of(self.world_view).unwrap();
                         self.object_action_menu = Some(ObjectActionMenu {
@@ -1248,14 +1461,17 @@ impl AppState for GameState {
 
                         self.time.set_paused(true);
                     }
-                    ObjectPickKind::DefaultAction => if let Some(a) = default_action {
-                        ui.widget_mut::<WorldView>(self.world_view).default_action_icon = if self.object_action_menu.is_none() {
-                            default_action
-                        }  else {
-                            None
-                        };
-                        self.handle_action(ui, objh, a);
-                    },
+                    ObjectPickKind::DefaultAction => {
+                        if let Some(a) = default_action {
+                            ui.widget_mut::<WorldView>(self.world_view)
+                                .default_action_icon = if self.object_action_menu.is_none() {
+                                default_action
+                            } else {
+                                None
+                            };
+                            self.handle_action(ui, objh, a);
+                        }
+                    }
                     ObjectPickKind::Skill(skill) => {
                         self.action_use_skill_on(skill, objh);
                     }
@@ -1273,20 +1489,32 @@ impl AppState for GameState {
                         CritterAnim::Running
                     };
                     seq.control()
-                        .cancellable(Move::new(dude_objh, PathTo::Point {
-                            point: pos.point,
-                            neighbor_if_blocked: true,
-                        }, anim))
+                        .cancellable(Move::new(
+                            dude_objh,
+                            PathTo::Point {
+                                point: pos.point,
+                                neighbor_if_blocked: true,
+                            },
+                            anim,
+                        ))
                         .finalizing(Stand::new(dude_objh));
                     self.obj_sequencer.replace(dude_objh, seq);
                 } else {
                     let mut wv = ui.widget_mut::<WorldView>(self.world_view);
                     let dude_obj = self.world.borrow().objects().dude();
-                    wv.hex_cursor_style = if self.world.borrow()
-                        .objects().path(dude_obj, PathTo::Point {
-                            point: pos.point,
-                            neighbor_if_blocked: false,
-                        }, false).is_some()
+                    wv.hex_cursor_style = if self
+                        .world
+                        .borrow()
+                        .objects()
+                        .path(
+                            dude_obj,
+                            PathTo::Point {
+                                point: pos.point,
+                                neighbor_if_blocked: false,
+                            },
+                            false,
+                        )
+                        .is_some()
                     {
                         HexCursorStyle::Normal
                     } else {
@@ -1314,19 +1542,24 @@ impl AppState for GameState {
                     let world = &mut self.world.borrow_mut();
                     let source_obj = Some(world.objects().dude());
                     let target_obj = Some(self.dialog.as_ref().unwrap().obj);
-                    self.scripts.execute_proc(sid, proc_id,
-                        &mut script::Context {
-                            ui,
-                            world,
-                            obj_sequencer: &mut self.obj_sequencer,
-                            dialog: &mut self.dialog,
-                            message_panel: self.message_panel,
-                            map_id: self.map_id.unwrap(),
-                            source_obj,
-                            target_obj,
-                            skill: None,
-                            rpg: &mut self.rpg,
-                        }).assert_no_suspend();
+                    self.scripts
+                        .execute_proc(
+                            sid,
+                            proc_id,
+                            &mut script::Context {
+                                ui,
+                                world,
+                                obj_sequencer: &mut self.obj_sequencer,
+                                dialog: &mut self.dialog,
+                                message_panel: self.message_panel,
+                                map_id: self.map_id.unwrap(),
+                                source_obj,
+                                target_obj,
+                                skill: None,
+                                rpg: &mut self.rpg,
+                            },
+                        )
+                        .assert_no_suspend();
                     // No dialog options means the dialog is finished.
                     self.dialog.as_ref().unwrap().is_empty()
                 } else {
@@ -1350,11 +1583,13 @@ impl AppState for GameState {
 
                     // In original MapUpdate is not always called (see gdialogEnter),
                     // but for now this difference doesn't seem to matter
-                    self.scripts.execute_map_procs(PredefinedProc::MapUpdate, ctx);
+                    self.scripts
+                        .execute_map_procs(PredefinedProc::MapUpdate, ctx);
                 }
             }
             UiCommandData::Scroll => {
-                let (dir, widg) = self.scroll_areas
+                let (dir, widg) = self
+                    .scroll_areas
                     .iter()
                     .find(|&(_, w)| w == &command.source)
                     .unwrap();
@@ -1365,23 +1600,29 @@ impl AppState for GameState {
                 SkilldexCommand::Cancel => self.skilldex.hide(ui),
                 SkilldexCommand::Show => {
                     self.show_skilldex(ui, None);
-                },
+                }
                 SkilldexCommand::Skill { skill, target } => {
                     self.skilldex.hide(ui);
                     if let Some(target) = target {
                         self.action_use_skill_on(skill, target);
                     } else {
-                        ui.widget_mut::<WorldView>(self.world_view).enter_skill_target_pick_mode(skill);
+                        ui.widget_mut::<WorldView>(self.world_view)
+                            .enter_skill_target_pick_mode(skill);
                     }
                 }
-            }
+            },
             UiCommandData::Inventory(cmd) => match cmd {
                 inventory::Command::Hover { object } => {
                     self.dude_look_at_object(object, ui);
                 }
-                | inventory::Command::Action { object, action: Some(Action::Look) }
-                | inventory::Command::Action { object, action: None }
-                => {
+                inventory::Command::Action {
+                    object,
+                    action: Some(Action::Look),
+                }
+                | inventory::Command::Action {
+                    object,
+                    action: None,
+                } => {
                     let dude_obj = self.world.borrow().objects().dude();
                     let descr = self.examine_object(dude_obj, object, ui);
                     let descr = BString::join(b'\n', &descr);
@@ -1389,20 +1630,22 @@ impl AppState for GameState {
                 }
                 Command::Hide => {}
                 Command::Show => {
-                    self.obj_sequencer.cancel(self.world.borrow().objects().dude());
+                    self.obj_sequencer
+                        .cancel(self.world.borrow().objects().dude());
                 }
                 _ => {}
-            }
+            },
             UiCommandData::MoveWindow(_) => {}
         }
     }
 
     fn update(&mut self, mut ctx: state::Update) {
         self.time.set_paused(
-            self.user_paused ||
-            self.scripts.can_resume() ||
-            self.skilldex.is_visible() ||
-            self.inventory.is_visible());
+            self.user_paused
+                || self.scripts.can_resume()
+                || self.skilldex.is_visible()
+                || self.inventory.is_visible(),
+        );
 
         self.time.update(ctx.delta);
 
@@ -1414,7 +1657,10 @@ impl AppState for GameState {
 
             const MAX_ITERS: u32 = 1000;
             for i in 0..MAX_ITERS {
-                assert!(i < MAX_ITERS - 1, "infinite loop in sequencer updating - event handling");
+                assert!(
+                    i < MAX_ITERS - 1,
+                    "infinite loop in sequencer updating - event handling"
+                );
                 {
                     let world = &mut self.world.borrow_mut();
                     assert!(self.seq_events.is_empty());
@@ -1434,7 +1680,8 @@ impl AppState for GameState {
             self.fidget.update(
                 self.time.time(),
                 &mut self.world.borrow_mut(),
-                &mut self.obj_sequencer);
+                &mut self.obj_sequencer,
+            );
         } else {
             self.obj_sequencer.sync(&mut sequence::Sync {
                 world: &mut self.world.borrow_mut(),

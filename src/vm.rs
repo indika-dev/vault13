@@ -106,7 +106,7 @@ use std::time::Duration;
 use crate::game::object;
 use crate::game::script::{NewScripts, ScriptKind};
 
-use instruction::{Instruction, instruction_map, Opcode};
+use instruction::{instruction_map, Instruction, Opcode};
 use stack::{Stack, StackId};
 
 pub use error::*;
@@ -272,11 +272,11 @@ pub type ProcedureId = u32;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum ProcedureFlag {
-    Timed           = 0x01,
-    Conditional     = 0x02,
-    Import          = 0x04,
-    Export          = 0x08,
-    Critical        = 0x10,
+    Timed = 0x01,
+    Conditional = 0x02,
+    Import = 0x04,
+    Export = 0x08,
+    Critical = 0x10,
 }
 
 #[derive(Debug)]
@@ -321,16 +321,14 @@ impl Program {
 
         let proc_count = BigEndian::read_i32(&code[PROC_TABLE_START..]) as usize;
 
-        let name_table_start = PROC_TABLE_START + PROC_TABLE_HEADER_LEN +
-            proc_count * PROC_ENTRY_LEN;
+        let name_table_start =
+            PROC_TABLE_START + PROC_TABLE_HEADER_LEN + proc_count * PROC_ENTRY_LEN;
         debug!("reading name table at 0x{:04x}", name_table_start);
-        let (names, name_table_len_bytes) =
-            Self::read_string_table(&code[name_table_start..])?;
+        let (names, name_table_len_bytes) = Self::read_string_table(&code[name_table_start..])?;
 
         let string_table_start = name_table_start + name_table_len_bytes;
         debug!("reading string table at 0x{:04x}", string_table_start);
-        let (strings, _) =
-            Self::read_string_table(&code[string_table_start..])?;
+        let (strings, _) = Self::read_string_table(&code[string_table_start..])?;
 
         debug!("reading procedure table at 0x{:04x}", PROC_TABLE_START);
         let procs = Self::read_proc_table(&code[PROC_TABLE_START..], &names)?;
@@ -387,17 +385,19 @@ impl Program {
                 let s = if let Some(i) = s.iter().position(|&b| b == 0) {
                     &s[..i]
                 } else {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData,
-                        "name or string table: string is not null-terminated"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "name or string table: string is not null-terminated",
+                    ));
                 };
                 let s = BString::from(s);
-                debug!("string {}: \"{}\"", start, s.display());
+                trace!("string {}: \"{}\"", start, s.display());
                 r.insert(start, Rc::new(s));
 
                 rd.set_position(end as u64);
             }
             if rd.position() as usize != total_len_bytes {
-               warn!("name or string table ended unexpectedly");
+                warn!("name or string table ended unexpectedly");
             }
             Ok((r, total_len_bytes))
         };
@@ -411,13 +411,20 @@ impl Program {
             let mut r = Vec::with_capacity(count);
             for i in 0..count {
                 let name = rd.read_u32::<BigEndian>()? as usize;
-                let name = names.get(name)
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData,
-                        "invalid procedure name reference"))?
+                let name = names
+                    .get(name)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "invalid procedure name reference",
+                        )
+                    })?
                     .clone();
                 let flags = BitFlags::from_bits(rd.read_u32::<BigEndian>()?)
-                    .ok().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData,
-                        "invalid procedure flags"))?;
+                    .ok()
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidData, "invalid procedure flags")
+                    })?;
                 let delay = Duration::from_millis(rd.read_u32::<BigEndian>()? as u64);
                 let condition_pos = rd.read_u32::<BigEndian>()? as usize;
                 let body_pos = rd.read_u32::<BigEndian>()? as usize;
@@ -431,9 +438,13 @@ impl Program {
                     body_pos,
                     arg_count,
                 };
-                debug!("procedure {} {}({}): {:#?}", i, proc.name.display(),
+                debug!(
+                    "procedure {} {}({}): {:#?}",
+                    i,
+                    proc.name.display(),
                     if proc.arg_count > 0 { "..." } else { "" },
-                    proc);
+                    proc
+                );
 
                 r.push(proc);
             }
@@ -443,8 +454,10 @@ impl Program {
         let mut by_name = HashMap::with_capacity(by_id.len());
         for (i, proc) in by_id.iter().enumerate() {
             if by_name.contains_key(&proc.name) {
-                return Self::map_io_err(Err(io::Error::new(io::ErrorKind::InvalidData,
-                    format!("duplicate procedure name: {}", proc.name.display()))));
+                return Self::map_io_err(Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("duplicate procedure name: {}", proc.name.display()),
+                )));
             }
             by_name.insert(proc.name.clone(), i as ProcedureId);
         }
@@ -466,7 +479,7 @@ pub struct ProgramState {
     pub data_stack: Stack<DataStackId>,
     pub return_stack: Stack<ReturnStackId>,
     /// Base offset in `data_stack` of procedure variables.
-    base:  Option<usize>,
+    base: Option<usize>,
     /// Base offset in `data_stack` of program global variables.
     global_base: Option<usize>,
     instr_state: instruction::State,
@@ -530,7 +543,9 @@ impl ProgramState {
     }
 
     pub fn execute_proc(&mut self, id: ProcedureId, ctx: &mut Context) -> Result<InvocationResult> {
-        let proc_pos = self.program.proc(id)
+        let proc_pos = self
+            .program
+            .proc(id)
             .ok_or(Error::BadProcedureId(id))?
             .body_pos;
 
@@ -599,7 +614,7 @@ impl ProgramState {
     }
 
     fn next_i32(&mut self) -> Result<i32> {
-        let r =  self.get_i32();
+        let r = self.get_i32();
         if r.is_ok() {
             self.code_pos += 4
         }
@@ -615,7 +630,7 @@ impl ProgramState {
     }
 
     fn next_f32(&mut self) -> Result<f32> {
-        let r =  self.get_f32();
+        let r = self.get_f32();
         if r.is_ok() {
             self.code_pos += 4
         }
@@ -718,12 +733,14 @@ impl Vm {
     }
 
     pub fn program_state(&self, handle: Handle) -> &ProgramState {
-         self.program_states.get(handle)
+        self.program_states
+            .get(handle)
             .expect("invalid program handle")
     }
 
     pub fn program_state_mut(&mut self, handle: Handle) -> &mut ProgramState {
-         self.program_states.get_mut(handle)
+        self.program_states
+            .get_mut(handle)
             .expect("invalid program handle")
     }
 }
