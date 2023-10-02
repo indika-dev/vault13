@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Dmytro Lysai <d@emphased.net>"]
 license = "GPL-3.0"
 edition = "2018"
-build ="build.rs"
+build = "build.rs"
 
 [profile.release]
 debug = true
@@ -24,7 +24,6 @@ enumflags2 = "0.7"
 enum-map = "0.4"
 enum-map-derive = "0.4"
 enum-primitive-derive = "0.2"
-env_logger = "0.10.0"
 flate2 = "1"
 if_chain = "1"
 log = "0.4"
@@ -33,7 +32,14 @@ measure_time = "0.8.2"
 num-traits = "0.2.15"
 rand = "0.8.5"
 # Using git because of https://github.com/Rust-SDL2/rust-sdl2/issues/1302.
-sdl2 = { git = "https://github.com/Rust-SDL2/rust-sdl2", features = ["bundled", "static-link", "unsafe_textures"] }
+sdl2 = { git = "https://github.com/Rust-SDL2/rust-sdl2", features = [
+  "bundled",
+  "static-link",
+  "unsafe_textures",
+] }
 sdl2-sys = { git = "https://github.com/Rust-SDL2/rust-sdl2" }
 slotmap = "1"
 static_assertions = "1.1"
+# custom additions
+log4rs = "1.2.0"
+rust-ini = "0.19.0"
