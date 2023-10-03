@@ -1,20 +1,25 @@
 use std::{
     fs::File,
-    io::{BufRead, BufReader, Result},
+    io::{BufReader, Error, ErrorKind, Result},
     path::{Path, PathBuf},
 };
 
+use ini::Ini;
 use log::debug;
 
-use super::{Metadata, Provider};
+use super::{Metadata, PropertiesProvider};
 
-pub fn new_provider<P: AsRef<Path>>(path: P) -> Result<Box<dyn Provider>> {
+const KNOWN_CONFIG_FILES: &'static [&'static str] = &["fallout2.cfg", "f2_res.ini", "ddraw.ini"];
+
+pub fn new_provider<P: AsRef<Path>>(path: P) -> Result<Box<dyn PropertiesProvider>> {
     Ok(Box::new(Inifile::new(path)?))
 }
 
 #[derive(Debug)]
 struct Inifile {
-    path: PathBuf,
+    name: String,
+    file_path: Box<PathBuf>,
+    properties: Ini,
     state: State,
 }
 
@@ -27,31 +32,70 @@ enum State {
 
 impl Inifile {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let config_file_result = File::open(path.as_ref());
-        if config_file_result.is_ok() {
-            Ok(Inifile {
-                path: path.as_ref().to_path_buf(),
-                state: State::Found,
-            })
-        } else {
-            Ok(Inifile {
-                path: path.as_ref().to_path_buf(),
-                state: State::Missing,
-            })
+        let mut result = Inifile {
+            name: path
+                .as_ref()
+                .file_name()
+                .unwrap()
+                .to_os_string()
+                .into_string()
+                .unwrap()
+                .trim()
+                .to_string(),
+            file_path: Box::new(PathBuf::new()),
+            properties: Ini::new(),
+            state: State::Missing,
+        };
+        if File::open(path.as_ref()).is_ok()
+            && KNOWN_CONFIG_FILES.contains(
+                &path
+                    .as_ref()
+                    .file_name()
+                    .unwrap()
+                    .to_os_string()
+                    .into_string()
+                    .unwrap()
+                    .as_str(),
+            )
+        {
+            debug!("loading ini file {}", path.as_ref().display());
+            result.file_path.push(path);
+            result.properties = Ini::read_from(&mut BufReader::new(
+                File::open(result.file_path.as_ref()).unwrap(),
+            ))
+            .unwrap_or(result.properties);
+            result.state = State::Found;
+        }
+        return Ok(result);
+    }
+
+    fn file(&self) -> Result<&Ini> {
+        match self.state {
+            State::Found => return Ok(&self.properties),
+            State::Missing => return Err(Error::new(ErrorKind::NotFound, "file not found")),
+            State::Err => return Err(Error::new(ErrorKind::NotFound, "file not found")),
         }
     }
 }
 
-impl Provider for Inifile {
-    fn reader(&self, path: &str) -> Result<Box<dyn BufRead + Send>> {
-        debug!("loading ini file {}", path);
-        let ini_reader = BufReader::new(File::open(path).unwrap());
-        Ok(Box::new(ini_reader))
+impl PropertiesProvider for Inifile {
+    fn reader(&self, path: &str) -> Result<Box<&Ini>> {
+        if path.contains(self.name.as_str()) {
+            return Ok(Box::new(&self.properties));
+        } else {
+            return Err(Error::new(ErrorKind::NotFound, "can't handle file"));
+        }
     }
 
     fn metadata(&self, path: &str) -> Result<Metadata> {
         // let len = self.to_fs_path(path).metadata()?.len();
-        Ok(Metadata { len: 1 })
+        if path.contains(self.name.as_str()) {
+            Ok(Metadata {
+                len: self.properties.len() as u64,
+            })
+        } else {
+            Err(Error::new(ErrorKind::InvalidInput, "can't handle file"))
+        }
     }
 }
 

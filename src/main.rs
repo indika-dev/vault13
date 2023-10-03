@@ -20,14 +20,12 @@ mod ui;
 mod util;
 mod vm;
 
-use ini::Ini;
 use log::*;
 use log4rs::append::console::ConsoleAppender;
 use log4rs::config::{Appender, Root};
 use log4rs::Config;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
-use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -91,57 +89,6 @@ fn args() -> clap::App<'static, 'static> {
         .after_help(
             "EXAMPLE:\n\
           \x20   vault13 /path/to/fallout2 artemple")
-}
-
-fn setup_file_system(fs: &mut fs::FileSystem, args: &clap::ArgMatches) {
-    let res_dir = Path::new(args.value_of("RESOURCE_DIR").unwrap());
-    info!("Using resources dir: {}", res_dir.display());
-
-    let mut dat_files = Vec::new();
-    let mut ini_files = Vec::new();
-
-    for file in &["fallout2.cfg", "f2_res.ini", "ddraw.ini"] {
-        let path: PathBuf = [res_dir, Path::new(file)].iter().collect();
-        if path.is_file() {
-            info!("Found {}", file);
-            ini_files.push(path);
-        }
-    }
-
-    // Add patchXXX.dat files.
-    for i in 0..999 {
-        let file = format!("patch{:03}.dat", i);
-        let path: PathBuf = [res_dir, Path::new(&file)].iter().collect();
-        if path.is_file() {
-            info!("Found {}", file);
-            dat_files.push(path)
-        } else {
-            break;
-        }
-    }
-    dat_files.reverse();
-
-    for file in &["master.dat", "critter.dat"] {
-        let path: PathBuf = [res_dir, Path::new(file)].iter().collect();
-        if path.is_file() {
-            info!("Found {}", file);
-            dat_files.push(path);
-        }
-    }
-
-    let data_dir: PathBuf = [res_dir, Path::new("data")].iter().collect();
-    if data_dir.is_dir() {
-        info!("Found `data` dir");
-        fs.register_provider(fs::stdfs::new_provider(data_dir).unwrap());
-    }
-
-    for ini_file in ini_files.iter() {
-        fs.register_provider(fs::inifile::new_provider(ini_file).unwrap());
-    }
-
-    for dat_file in dat_files.iter().rev() {
-        fs.register_provider(fs::dat::v2::new_provider(dat_file).unwrap());
-    }
 }
 
 struct Timer {
@@ -216,7 +163,7 @@ fn main() {
     info!("Version: {}", version());
     info!("Build: {}", env!("BUILD_TARGET"));
 
-    let mut fs = fs::FileSystem::new();
+    let fs = Rc::new(fs::FileSystem::new(&args().get_matches()));
 
     let map_name: String;
     {
@@ -227,8 +174,6 @@ fn main() {
             return;
         }
 
-        setup_file_system(&mut fs, args);
-
         let s = args.value_of("MAP").unwrap().to_lowercase();
         map_name = if s.ends_with(".map") {
             s[..s.len() - 4].into()
@@ -238,16 +183,15 @@ fn main() {
     }
 
     debug!("loading ini file");
-    let ini_reader = fs.reader("fallout2.cfg");
-    let read_conf_result = Ini::read_from(&mut ini_reader.unwrap());
+    let read_conf_result = fs.properties("fallout2.cfg");
     let fallout2_config = match read_conf_result {
         Ok(ini) => ini,
         Err(error) => panic!("can't open file fallout2.cfg: {:?}", error),
     };
-    let language = fallout2_config.get_from_or(Some("system"), "language", "deutsch");
+    let language = fallout2_config
+        .get_from_or(Some("system"), "language", "deutsch")
+        .trim();
     debug!("language is {}", language);
-
-    let fs = Rc::new(fs);
 
     let proto_db = Rc::new(ProtoDb::new(fs.clone(), language).unwrap());
 
@@ -302,7 +246,16 @@ fn main() {
     ui.set_cursor_pos(Point::new(640 / 2, 480 / 2));
 
     let misc_msgs = Rc::new(Messages::read_file(&fs, language, "game/misc.msg").unwrap());
-    let mut state = GameState::new(fs, language, proto_db, frm_db, fonts, misc_msgs, start, ui);
+    let mut state = GameState::new(
+        fs.clone(),
+        language,
+        proto_db,
+        frm_db,
+        fonts,
+        misc_msgs,
+        start,
+        ui,
+    );
 
     state.new_game();
     state.switch_map(&map_name, ui);
